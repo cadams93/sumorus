@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"bytes"
-
-	"fmt"
 )
 
 type SumoLogicHook struct {
@@ -16,8 +14,6 @@ type SumoLogicHook struct {
 	tags			[]string
 	host			string
 	levels 			[]logrus.Level
-
-	messageChan chan []byte
 }
 
 type SumoLogicMesssage struct {
@@ -26,10 +22,6 @@ type SumoLogicMesssage struct {
 	Level			string			`json:"level"`
 	Data			interface{}		`json:"data"`
 }
-
-var (
-	newline = []byte{'\n'}
-)
 
 func NewSumoLogicHook(endPointUrl string, host string, level logrus.Level, tags ...string) *SumoLogicHook {
 	levels := []logrus.Level{}
@@ -51,15 +43,12 @@ func NewSumoLogicHook(endPointUrl string, host string, level logrus.Level, tags 
 		tagList = append(tagList,tag)
 	}
 
-	hook := &SumoLogicHook{
+	return &SumoLogicHook{
 		host: host,
 		tags: tagList,
 		endPointUrl: endPointUrl,
 		levels: levels,
-		messageChan: make(chan []byte, 1000),
 	}
-	go hook.run()
-	return hook
 }
 
 func (hook *SumoLogicHook) Fire(entry *logrus.Entry) error {
@@ -75,52 +64,29 @@ func (hook *SumoLogicHook) Fire(entry *logrus.Entry) error {
 		Data: data,
 	}
 	payload, _ := json.Marshal(message)
-	hook.messageChan <- payload
+	req, err := http.NewRequest(
+		"POST",
+		hook.endPointUrl,
+		bytes.NewBuffer(payload),
+	)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{ Timeout: time.Duration(30 * time.Second) }
+	resp, err := client.Do(req)
+
+	if (err != nil) {
+		return err
+	}
+
+	defer resp.Body.Close()
 
 	return nil
 }
 
-func (hook *SumoLogicHook) send(messages [][]byte) {
-	req, err := http.NewRequest(
-		"POST",
-		hook.endPointUrl,
-		bytes.NewBuffer(bytes.Join(messages, newline)),
-	)
-	if err != nil {
-		fmt.Println("error creating sumologic request", err)
-		return
-	}
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
-
-	if err != nil {
-		fmt.Println("error sending sumologic request", err)
-		return
-	}
-
-	resp.Body.Close()
-}
-
 func (hook *SumoLogicHook) Levels() []logrus.Level {
 	return hook.levels
-}
-
-func (hook *SumoLogicHook) run() {
-	// Batch send the current log lines each 15 seconds
-	tock := time.NewTicker(15 * time.Second)
-	var messages [][]byte
-	for {
-		select {
-		case <-tock.C:
-			if len(messages) == 0 {
-				continue
-			}
-			go hook.send(messages)
-			messages = nil
-
-		case message := <-hook.messageChan:
-			messages = append(messages, message)
-		}
-	}
 }
