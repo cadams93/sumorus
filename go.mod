@@ -1,4 +1,4 @@
-module sumorus
+module github.com/divisionone/sumorus
 
 go 1.17
 
